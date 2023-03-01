@@ -51,7 +51,7 @@ str(elongation)
 
 #changing factor levels (useful for plotting!)
 levels(elongation$zone)
-levels(elongation$zone) <- c("A", "B", "C", "D", "E", "F")
+#levels(elongation$zone) <- c("A", "B", "C", "D", "E", "F")
 levels(elongation$zone)
 
 #changing formats of data (to long version)
@@ -99,3 +99,20 @@ summary1 <- summarize(elong_group, TotalGrowth = sum(Length))
 summary2 <- summarize(elongation_long, TotalGrowth = sum(Length))
 summary3 <- summarize(elong_group, TotalGrowth = sum(Length), 
                       MeanGrowth = mean(Length), stdGrowth = sd(Length))
+
+
+
+treatments<- read.csv(here::here("Jan_18_Datamanipulation/CC", "EmpetrumTreatments.csv"), header = TRUE, sep = ";")
+head(treatments)
+head(elongation_long)
+
+#using join function 
+
+treatments$Zone <- as.factor(treatments$Zone)
+experiment <- left_join(elongation_long, treatments, by = c("Indiv" = "Indiv", "zone" = "Zone"))
+
+#you can also use the merge function 
+
+experiment2 <- merge(elongation_long, treatments, by.x = c("zone", "Indiv"), by.y = c("Zone", "Indiv"))
+
+boxplot(Length ~ Treatment, data = experiment2)
