@@ -1,0 +1,121 @@
+---
+title: "Introduction to Ordination"
+author: "Lydia Walton"
+date: "15/03/2023"
+output: html_document
+---
+
+```{r setting everything up}
+library(vegan)
+library(ape)
+library(dplyr)
+
+data(varespec)
+```
+
+In ecological terms: Ordination summarizes community data (such as species abundance data: samples by species) by producing a low-dimensional ordination space in which similar species and samples are plotted close together, and dissimilar species and samples are placed far apart. Ideally and typically, dimensions of this low dimensional space will represent important and interpretable environmental gradients.
+
+# Plots
+
+```{r making plots}
+varespec %>% 
+  metaMDS(trace = FALSE) %>% 
+  ordiplot(type = "none") %>% 
+  text("species") #shows where the species are in relation to each other
+
+varespec %>% 
+  metaMDS(trace = FALSE) %>% 
+  ordiplot(type = "none") %>% 
+  text("sites") #shows where the sites are in relation to each other
+
+#Overlay environmental data to interpret gradients
+```
+
+# PCA
+PCA uses a rotation of the original axes to derive new axes, which maximize the variance in the data set.
+```{r}
+#Need to standardize variables!
+PCA <- rda(varespec, scale = FALSE) #species all in the same units
+
+barplot(as.vector(PCA$CA$eig/sum(PCA$CA$eig)))
+#First PC explains >50% of data, second PC explains >20%
+
+sum((as.vector(PCA$CA$eig/sum(PCA$CA$eig))[1:2]))
+#79% of data variance is explained by first and second PC - very good
+
+plot(PCA)
+
+plot(PCA, display = "sites", type = "points") #just sites
+
+plot(PCA, display = "species", type = "text") #just species
+
+#Extract site scores and species scores and use to put arrows on plot
+sitePCA <- PCA$CA$u
+sitePCA
+
+speciesPCA <- PCA$CA$v
+speciesPCA
+
+#make a biplot
+biplot(PCA, choices = c(1,2), type = c("text", "points"), xlim = c(-5,10))
+#abundance of the species is continuously increasing in the direction of the arrow, and decreasing in the opposite direction.
+
+
+```
+
+# PCoA
+For abundance data, Bray-Curtis distance is often recommended. You can use Jaccard index for presence/absence data. When the distance metric is Euclidean, PCoA is equivalent to Principal Components Analysis. Although PCoA is based on a (dis)similarity matrix, the solution can be found by eigenanalysis. The interpretation of the results is the same as with PCA.
+```{r}
+#How different site 1 is from all the other sites, etc.
+dist <- vegdist(varespec, method = "bray")
+
+PCoA <- pcoa(dist, correction = "cailliez")
+
+barplot(PCoA$values$Relative_eig[1:10]) #decreasing percent of variance explained (PCoA 1 >30%)
+
+biplot.pcoa(PCoA) #each site has a circle and a number (no species)
+
+biplot.pcoa(PCoA, varespec)
+```
+
+# NMDS
+NMDS attempts to represent the pairwise dissimilarity between objects in a low-dimensional space. Any dissimilarity coefficient or distance measure may be used to build the distance matrix used as input. *NMDS is a rank-based approach*. This means that the original distance data is substituted with ranks.
+The stress value reflects how well the ordination summarizes the observed distances among the samples.
+A plot of stress (a measure of goodness-of-fit) vs. dimensionality can be used to assess the proper choice of dimensions. The stress values themselves can be used as an indicator. Stress values >0.2 are generally poor and potentially uninterpretable, whereas values <0.1 are good and <0.05 are excellent, leaving little danger of misinterpretation.
+```{r}
+# First step is to calculate a distance matrix. See PCOA for more information about the distance measures
+# Here we use bray-curtis distance, which is recommended for abundance data
+dist <- vegdist(varespec,  method = "bray")
+
+# In this part, we define a function NMDS.scree() that automatically 
+# performs a NMDS for 1-10 dimensions and plots the nr of dimensions vs the stress
+NMDS.scree <- function(x) { #where x is the name of the data frame variable
+  plot(rep(1, 10), replicate(10, metaMDS(x, autotransform = F, k = 1)$stress), xlim = c(1, 10),ylim = c(0, 0.30), xlab = "# of Dimensions", ylab = "Stress", main = "NMDS stress plot")
+  for (i in 1:10) {
+    points(rep(i + 1,10),replicate(10, metaMDS(x, autotransform = F, k = i + 1)$stress))
+  }
+}
+
+# Use the function that we just defined to choose the optimal nr of dimensions
+NMDS.scree(dist)
+```
+
+```{r}
+# Because the final result depends on the initial random placement of the points we`ll set a seed to make the results reproducible
+set.seed(2)
+
+# Here, we perform the final analysis and check the result
+NMDS1 <- metaMDS(dist, k = 2, trymax = 100, trace = F)
+# Do you know what the trymax = 100 and trace = F means?
+# Let's check the results
+NMDS1
+
+# If you don`t provide a dissimilarity matrix, metaMDS automatically applies Bray-Curtis. So in our case, the results would have to be the same
+NMDS2 <- metaMDS(varespec, k = 2, trymax = 100, trace = F)
+NMDS2
+
+stressplot(NMDS1)
+
+plot(NMDS1, type = "t")
+```
+
