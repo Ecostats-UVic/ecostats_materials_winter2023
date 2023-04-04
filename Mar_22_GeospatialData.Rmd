@@ -1,0 +1,191 @@
+---
+title: "Geospatial workshop"
+author: "Lydia Walton"
+date: "22/03/2023"
+output: html_document
+---
+# Intro to geospatial data
+Geospatial vector data consist of geometries defined based on geographic coordinates.https://ourcodingclub.github.io/tutorials/spatial-vector-sf/ 
+```{r}
+#Simple features is a set of standards for geospatial data. 
+
+# Load libraries
+library(dplyr) # data wrangling
+library(tidyr) # data wrangling
+library(ggplot2) # data visualisation
+library(sf) # simple features - geospatial geometries
+library(osmdata) # obtaining OpenStreetMap vector data
+library(units) # working with units
+library(mapview) # interactive geometry viewing
+library(ggmap) # downloading raster maps from a variety of sources
+library(ggspatial) # map backgrounds and annotations for ggplot
+library(tmap) # static/interactive map library with ggplot-like syntax
+
+```
+
+# Edinburgh data
+```{r}
+# Get the polygon for Edinburgh
+city_polygon <- getbb("City of Edinburgh",
+                      featuretype = "settlement",
+                      format_out = "polygon")
+
+# Get the rectangular bounding box
+city_rect <- getbb("City of Edinburgh", featuretype = "settlement")
+
+#Pull out green spaces
+greensp <- opq(bbox = city_polygon) %>% 
+  add_osm_feature(key = "leisure", value = c("park", "nature_reserve", "golf_course")) %>% 
+  osmdata_sf() %>% 
+  trim_osmdata(city_polygon)
+
+greensp
+  
+glimpse(greensp$osm_polygons)
+
+#multi-polygon binding
+greensp_sf <- bind_rows(st_cast(greensp$osm_polygons, "MULTIPOLYGON",
+                                greensp$osm_multipolygons)) %>% 
+  select(name, osm_id, leisure)
+
+plot(greensp_sf["leisure"])
+
+head(greensp_sf)
+unique(greensp_sf$leisure)
+
+#remove NAs
+newgreensp_sf <- greensp_sf %>% 
+  filter(is.na(leisure) == FALSE) %>% 
+  rename(greensp_type = leisure) %>% 
+  st_make_valid()
+
+#Save this data to upload it later (saves as a geopackage ".gpkg")
+st_write(newgreensp_sf,
+         dsn = "greenspaces_Edi_OSM.gpkg", # file path
+         layer="greenspaces", # layer name
+         layer_options = c(paste0("DESCRIPTION=Contains spatial multipolygons for parks, ",
+                                  "nature reserves and golf courses in Edinburgh, Scotland. ",
+                                  "Copyright OpenStreetMap constibutors. ODbL ",
+                                  "https://www.openstreetmap.org/copyright")),
+         # add layer description
+         delete_dsn = TRUE
+         # to delete the whole file first, because sometimes, we can just
+         # overwrite or append one layer to an already existing file.
+         # If the file doesn't exist, this will return a friendly warning.
+         )
+
+#Read in the data
+gsp <- st_read(dsn = "greenspaces_Edi_OSM.gpkg", layer = "greenspaces")
+gsp
+```
+
+# Coordinate Reference Systems (CRS)
+
+Coordinate reference systems relate vector geometries to the Earth’s surface, and using the right CRS can be very important to execute our operations successfully. There are two main types of CRS: geographic and projected.
+
+3D object to a flat map --> projections are how we project 3D globe onto 2D surface
+We will set our projections in R so everything can stack properly and we don't have any mismatches
+
+WGS 84 is generally a good projection for North America 
+```{r}
+#Look at the CRS of our sf object
+st_crs(greensp_sf)
+
+#Transform projection to British National Grid (OSGB 1936)
+greensp_sf <- st_transform(greensp_sf, 27700)
+st_crs(greensp_sf)
+
+
+```
+
+# Spatial Operations
+```{r}
+#Create new column within our df
+greensp_sf <- mutate(greensp_sf, area = st_area(greensp_sf))
+
+head(greensp_sf$area) #Area for each spatial polygon object (in m^2)
+
+#Set units by hand
+greensp_sf <- greensp_sf %>% 
+  mutate(area_ha = set_units(area, "ha")) #Change units to ha
+
+#mapview can create an interactive map
+mapview(greensp_sf)
+
+#Filter out areas that are too small, etc.
+greensp_sf <- filter(greensp_sf, as.numeric(area_ha)>=2)
+
+#Can split into different lists - golf course, nature reserve, park
+gsp_list <- greensp_sf %>% 
+  split(.$leisure)
+
+#Cut out parts of parks that are covered by nature reserves or golf course (remove the overlap)
+gsp_list$park <- st_difference(gsp_list$park, st_union(gsp_list$nature_reserve))
+gsp_list$park <- st_difference(gsp_list$park, st_union(gsp_list$golf_course))
+
+gsp <- bind_rows(gsp_list) %>% 
+ mutate(area = st_area(.), 
+        area_ha = set_units(area, "ha")) %>% 
+  filter(as.numeric(area_ha)>=2)
+
+mapview(gsp)
+
+```
+
+# Draw Maps
+```{r}
+#Create new df with mutated levels of green spaces (Replace the way things are spelt)
+greensp_sf_forplot <- mutate(gsp, leisure = as.factor(factor(leisure, levels = c("golf_course", "nature_reserve", "park"), labels = c("Golf Course", "Nature Reserve", "Park"))))
+
+#First make a Stamen map 
+stamen_raster <- get_stamenmap(city_rect, zoom = 12)
+
+# Plot map with ggplot
+(edi_greenspaces_map <-
+  ggplot(data = greensp_sf_forplot) +
+    inset_ggmap(stamen_raster) + # add ggmap background
+    geom_sf(aes(fill = leisure)) + # add sf shapes, coloured by greensp_type
+    coord_sf(crs = st_crs(4326), expand = FALSE) +
+    # change the CRS of the sf back to WGS84 to match the ggmap raster
+    scale_fill_manual(values = c("#44AA99", "#117733", "#AA4499")) +
+    # add custom colours from Tol palette (colourblind-friendly)
+    labs(title = "Green spaces in Edinburgh, Scotland",
+         subtitle = "Parks, nature reserves and golf courses > 2 ha\n",
+         caption = paste0("Map tiles by Stamen Design (stamen.com), CC BY 3.0. ",
+                         "http://creativecommons.org/licenses/by/3.0\n",
+                         "Map data © OpenStreetMap contributors, ODbL. ",
+                         "http://www.openstreetmap.org/copyright")) +
+    # add various labels
+    annotation_scale(location = "bl") + # ggspatial scale on bottom left
+    annotation_north_arrow(location = "tr") + # ggspatial arrow on top right
+    theme_void() + # get rid of axis ticks, titles
+    theme(legend.title = element_blank(),
+          legend.position = c(.98, .02),
+          legend.justification = c("right", "bottom"),
+          legend.box.just = "right",
+          legend.box.background = element_rect(fill = "white", colour = "gray"),
+          legend.margin = margin(6, 6, 6, 6),
+          # move legend to bottom right and customise
+          plot.margin = margin(12,12,12,12))
+          # add margin around plot
+)
+
+```
+
+# Make an interactive map using tmap
+```{r}
+# Plot interactively with tmap
+tmap_mode("view") # interactive mode
+
+(edi_greenspace_tmap <-
+  tm_basemap("Stamen.Terrain") + # add Stamen Terrain basemap
+  tm_shape(greensp_sf_forplot) + # add the sf
+  tm_sf(col = "leisure", # colour by green space type
+        title = "", # no legend title
+        palette = c("#44AA99", "#117733", "#AA4499"), # custom fill colours
+        popup.vars = c("Area  " = "area_ha"), # customise popup to show area
+        popup.format = list(digits=1)) + # limit area to 1 decimal digit
+  tm_scale_bar() # add scale bar
+)
+```
+
